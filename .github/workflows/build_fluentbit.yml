@@ -9,7 +9,9 @@ on:
 
 jobs:
   build-fluentbit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+     # Only create releases on pushes to main/master, not on PRs
+    if: github.event_name != 'pull_request'
     
     steps:
     - name: Install dependencies
@@ -36,6 +38,38 @@ jobs:
         cd fluent-bit
         git submodule update --init --recursive
 
+    - name: Get Fluent Bit commit info
+      id: fluentbit_info
+      run: |
+        cd fluent-bit
+        FLUENTBIT_SHA=$(git rev-parse --short HEAD)
+        FLUENTBIT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "unknown")
+        echo "sha=${FLUENTBIT_SHA}" >> $GITHUB_OUTPUT
+        echo "version=${FLUENTBIT_VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Get next release version
+      id: next_version
+      run: |
+        # Get the latest release tag from this repo
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "Latest tag: $LATEST_TAG"
+        
+        # Extract version number (remove 'v' prefix if present)
+        VERSION=${LATEST_TAG#v}
+        
+        # Split version into components
+        IFS='.' read -ra VERSION_PARTS <<< "$VERSION"
+        MAJOR=${VERSION_PARTS[0]:-0}
+        MINOR=${VERSION_PARTS[1]:-0}
+        PATCH=${VERSION_PARTS[2]:-0}
+        
+        # Increment patch version
+        PATCH=$((PATCH + 1))
+        
+        NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+        echo "Next version: $NEW_VERSION"
+        echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+
     - name: Configure build
       run: |
         cd fluent-bit
@@ -61,20 +95,53 @@ jobs:
         mkdir -p artifacts
         cp bin/fluent-bit artifacts/
         cp -r bin/fluent-bit artifacts/ 2>/dev/null || true
-        tar -czf fluent-bit-build.tar.gz -C artifacts .
+        # Include version info in artifact name
+        tar -czf fluent-bit-${{ steps.next_version.outputs.version }}-${{ steps.fluentbit_info.outputs.sha }}.tar.gz -C artifacts .
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: fluent-bit-build
-        path: fluent-bit/build/fluent-bit-build.tar.gz
+        name: fluent-bit-${{ steps.next_version.outputs.version }}-${{ steps.fluentbit_info.outputs.sha }}
+        path: fluent-bit/build/fluent-bit-${{ steps.next_version.outputs.version }}-${{ steps.fluentbit_info.outputs.sha }}.tar.gz
         retention-days: 30
 
     - name: Display build info
       run: |
         cd fluent-bit/build
         echo "Build completed successfully!"
-        echo "Fluent Bit version:"
+        echo "Fluent Bit version: ${{ steps.fluentbit_info.outputs.version }}"
+        echo "Fluent Bit commit: ${{ steps.fluentbit_info.outputs.sha }}"
+        echo "Release version: ${{ steps.next_version.outputs.version }}"
+        echo "Fluent Bit binary info:"
         ./bin/fluent-bit --version
         echo "Binary size:"
         ls -lh bin/fluent-bit
+
+    - name: Create and push tag
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git tag ${{ steps.next_version.outputs.version }}
+        git push origin ${{ steps.next_version.outputs.version }}
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.next_version.outputs.version }}
+        name: "Fluent Bit Build ${{ steps.next_version.outputs.version }} (fb-${{ steps.fluentbit_info.outputs.sha }})"
+        body: |
+          Automated build of Fluent Bit
+          
+          **Build Details:**
+          - Fluent Bit Version: ${{ steps.fluentbit_info.outputs.version }}
+          - Fluent Bit Commit: `${{ steps.fluentbit_info.outputs.sha }}`
+          - Build Date: ${{ github.event.head_commit.timestamp }}
+          - Workflow Run: [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          **Download:**
+          The compiled Fluent Bit binary is attached as `fluent-bit-${{ steps.next_version.outputs.version }}-${{ steps.fluentbit_info.outputs.sha }}.tar.gz`
+        files: fluent-bit/build/fluent-bit-${{ steps.next_version.outputs.version }}-${{ steps.fluentbit_info.outputs.sha }}.tar.gz
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
