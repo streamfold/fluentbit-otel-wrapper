@@ -1,0 +1,89 @@
+name: Build Fluent Bit
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-fluentbit:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          make \
+          tar \
+          libssl-dev \
+          libsasl2-dev \
+          pkg-config \
+          libsystemd-dev \
+          zlib1g-dev \
+          libpq-dev \
+          postgresql-server-dev-all \
+          flex \
+          bison \
+          libyaml-dev
+
+    - name: Clone Fluent Bit repository
+      run: |
+        git clone https://github.com/fluent/fluent-bit.git
+        cd fluent-bit
+        git submodule update --init --recursive
+
+    - name: Configure build
+      run: |
+        cd fluent-bit
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release \
+              -DFLB_RELEASE=On \
+              -DFLB_TRACE=Off \
+              -DFLB_JEMALLOC=On \
+              -DFLB_TLS=On \
+              -DFLB_SHARED_LIB=Off \
+              -DFLB_EXAMPLES=Off \
+              -DFLB_HTTP_SERVER=On \
+              -DFLB_IN_SYSTEMD=On \
+              -DFLB_OUT_KAFKA=On \
+              ..
+
+    - name: Build Fluent Bit
+      run: |
+        cd fluent-bit/build
+        make -j$(nproc)
+
+    - name: Run tests
+      run: |
+        cd fluent-bit/build
+        make test
+
+    - name: Create build artifacts
+      run: |
+        cd fluent-bit/build
+        mkdir -p artifacts
+        cp bin/fluent-bit artifacts/
+        cp -r bin/fluent-bit artifacts/ 2>/dev/null || true
+        tar -czf fluent-bit-build.tar.gz -C artifacts .
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: fluent-bit-build
+        path: fluent-bit/build/fluent-bit-build.tar.gz
+        retention-days: 30
+
+    - name: Display build info
+      run: |
+        cd fluent-bit/build
+        echo "Build completed successfully!"
+        echo "Fluent Bit version:"
+        ./bin/fluent-bit --version
+        echo "Binary size:"
+        ls -lh bin/fluent-bit
