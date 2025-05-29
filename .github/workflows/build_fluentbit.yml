@@ -39,7 +39,6 @@ jobs:
     - name: Configure build
       run: |
         cd fluent-bit
-        mkdir build
         cd build
         cmake -DCMAKE_BUILD_TYPE=Release \
               -DFLB_RELEASE=On \
